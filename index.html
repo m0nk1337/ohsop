@@ -7,7 +7,8 @@
   <style>
     body { font-family: Arial; padding: 20px; background: #f7f7f7; }
     input { width: 70%; padding: 10px; }
-    button { padding: 10px 16px; margin-left: 5px; }
+    button { padding: 10px 16px; margin-left: 5px; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
     pre { background: #fff; padding: 15px; margin-top: 15px; border-radius: 5px; white-space: pre-wrap; }
   </style>
 </head>
@@ -17,28 +18,24 @@
 <h3>Inside Sales Knowledge Assistant</h3>
 
 <input id="q" placeholder="Ask from SOP / Policy / Process..." />
-<button onclick="ask()">Ask</button>
+<button id="askBtn" disabled>Ask</button>
 
 <pre id="a">Loading knowledge base… please wait.</pre>
 
 <script type="module">
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.16.1";
 
-/* ================= HARD RESET ================= */
+/* ===== HARD ENV RESET ===== */
 env.allowLocalModels = false;
 env.useBrowserCache = false;
-
-// 🔥 ABSOLUTE OVERRIDE (THIS IS THE KEY)
 env.localModelPath = null;
 env.remoteHost = "https://huggingface.co";
 env.remotePathTemplate = "{model}/resolve/main/";
-/* ============================================== */
+/* ========================= */
 
-/* ================= CONFIG ================= */
 const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
 const TAB_INDEX_NAME = "Tabs";
 const SIMILARITY_THRESHOLD = 0.28;
-/* ========================================= */
 
 let docs = [];
 let vectors = [];
@@ -66,17 +63,11 @@ async function loadAllTabs() {
 }
 
 /* ---------- MODELS ---------- */
-console.log("Loading embedding model (HF CDN)...");
-const embedder = await pipeline(
-  "feature-extraction",
-  "Xenova/all-MiniLM-L6-v2"
-);
+console.log("Loading embedding model...");
+const embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
 
-console.log("Loading generation model (HF CDN)...");
-const generator = await pipeline(
-  "text-generation",
-  "Xenova/distilgpt2"
-);
+console.log("Loading generation model...");
+const generator = await pipeline("text-generation", "Xenova/distilgpt2");
 
 /* ---------- Cosine similarity ---------- */
 function cosine(a, b) {
@@ -97,8 +88,12 @@ await indexDocs();
 document.getElementById("a").innerText =
   "Knowledge base loaded. You can start asking questions.";
 
-/* ---------- ASK ---------- */
-window.ask = async function () {
+/* ✅ ENABLE BUTTON ONLY AFTER READY */
+const askBtn = document.getElementById("askBtn");
+askBtn.disabled = false;
+
+/* ---------- ASK HANDLER ---------- */
+askBtn.addEventListener("click", async () => {
   const q = document.getElementById("q").value.trim();
   if (!q) return;
 
@@ -110,7 +105,8 @@ window.ask = async function () {
   })).sort((a, b) => b.score - a.score);
 
   if (!scored.length || scored[0].score < SIMILARITY_THRESHOLD) {
-    document.getElementById("a").innerText = "I don't have that information.";
+    document.getElementById("a").innerText =
+      "I don't have that information.";
     return;
   }
 
@@ -131,7 +127,7 @@ ${q}
 
   const out = await generator(prompt, { max_new_tokens: 100 });
   document.getElementById("a").innerText = out[0].generated_text;
-};
+});
 </script>
 
 </body>
