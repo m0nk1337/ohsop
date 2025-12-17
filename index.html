@@ -1,9 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Inside Sales Knowledge Assistant (AI)</title>
+  <title>Inside Sales Knowledge Assistant</title>
   <link rel="icon" href="data:,">
-
   <style>
     body { font-family: Arial; padding: 20px; background: #f7f7f7; }
     input { width: 70%; padding: 10px; }
@@ -14,42 +13,45 @@
 
 <body>
 
-<h3>Inside Sales Knowledge Assistant (Gemini)</h3>
+<h3>Inside Sales Knowledge Assistant</h3>
 
-<input id="q" placeholder="Ask anything about packages / SOP / policy…" />
+<input id="q" placeholder="Ask anything…" />
 <button onclick="ask()">Ask</button>
 
 <pre id="a">Ready.</pre>
 
 <script>
+/* ================= CONFIG ================= */
 const API_KEY = "AIzaSyDASIlc-6KDR5dniCMPh_WLMFYM8tm_oOk";
 const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
 const TAB_INDEX_NAME = "Tabs";
+/* ========================================= */
 
-async function loadAllSheetText() {
+async function loadEntireSheet() {
   const tabsRes = await fetch(
     `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
   );
   const tabs = await tabsRes.json();
 
-  let text = "";
+  let fullText = "";
 
-  for (const t of tabs) {
-    const name = t.SheetName?.trim();
-    if (!name) continue;
+  for (const row of tabs) {
+    const tab = row.SheetName?.trim();
+    if (!tab) continue;
 
     const res = await fetch(
-      `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(name)}`
+      `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`
     );
     const rows = await res.json();
     if (!Array.isArray(rows)) continue;
 
+    fullText += `\n\n=== ${tab} ===\n`;
     rows.forEach(r => {
-      text += Object.values(r).join(" ") + "\n";
+      fullText += Object.values(r).join(" | ") + "\n";
     });
   }
 
-  return text;
+  return fullText;
 }
 
 async function ask() {
@@ -58,16 +60,11 @@ async function ask() {
 
   document.getElementById("a").innerText = "Thinking…";
 
-  const sheetData = await loadAllSheetText();
+  const sheetData = await loadEntireSheet();
 
   const prompt = `
-You are an internal knowledge assistant.
-
-RULES:
-- Answer ONLY using the provided data
-- If the answer is not present, say exactly:
-"I don't have that information."
-- Do NOT guess or add external knowledge
+You are an internal sales assistant.
+Use the following internal data to answer the question.
 
 DATA:
 ${sheetData}
@@ -90,7 +87,7 @@ ${q}
   const json = await res.json();
   const answer =
     json.candidates?.[0]?.content?.parts?.[0]?.text ??
-    "I don't have that information.";
+    "No response.";
 
   document.getElementById("a").innerText = answer;
 }
