@@ -1,9 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Internal Knowledge AI</title>
-
-  <!-- Prevent favicon error (cosmetic) -->
+  <title>Inside Sales Knowledge Assistant</title>
   <link rel="icon" href="data:,">
 
   <style>
@@ -22,9 +20,8 @@
     }
     button {
       padding: 10px 16px;
-      font-size: 14px;
-      cursor: pointer;
       margin-left: 5px;
+      cursor: pointer;
     }
     pre {
       background: #ffffff;
@@ -46,19 +43,28 @@
 <pre id="a">Loading knowledge base… please wait.</pre>
 
 <script type="module">
-import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.0";
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.0";
 
-// ================= CONFIG =================
+/* ================= HARD ENV RESET ================= */
+env.allowLocalModels = false;
+env.useBrowserCache = false;
+
+/* FORCE Hugging Face CDN — CRITICAL FIX */
+env.remoteHost = "https://huggingface.co";
+env.remotePathTemplate = "{model}/resolve/main/";
+/* ================================================= */
+
+/* ================= CONFIG ================= */
 const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
 const TAB_INDEX_NAME = "Tabs";
 const SIMILARITY_THRESHOLD = 0.28;
-const CACHE_KEY = "sheet_vectors_v2";
-// =========================================
+const CACHE_KEY = "sheet_vectors_final_v1";
+/* ========================================= */
 
 let docs = [];
 let vectors = [];
 
-// ---------- Load tab names ----------
+/* ---------- Load tab names ---------- */
 async function loadTabNames() {
   const res = await fetch(
     `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
@@ -67,7 +73,7 @@ async function loadTabNames() {
   return rows.map(r => r.SheetName).filter(Boolean);
 }
 
-// ---------- Load all tabs ----------
+/* ---------- Load all tabs ---------- */
 async function loadAllTabs() {
   const tabs = await loadTabNames();
   docs = [];
@@ -85,7 +91,7 @@ async function loadAllTabs() {
   }
 }
 
-// ---------- Models ----------
+/* ---------- Load models ---------- */
 console.log("Loading embedding model...");
 const embedder = await pipeline(
   "feature-extraction",
@@ -98,12 +104,12 @@ const generator = await pipeline(
   "Xenova/distilgpt2"
 );
 
-// ---------- Math ----------
+/* ---------- Cosine similarity ---------- */
 function cosine(a, b) {
-  return a.reduce((s, v, i) => s + v * b[i], 0);
+  return a.reduce((sum, v, i) => sum + v * b[i], 0);
 }
 
-// ---------- Index / Cache ----------
+/* ---------- Index docs ---------- */
 async function indexDocs() {
   const cached = localStorage.getItem(CACHE_KEY);
   if (cached) {
@@ -117,33 +123,17 @@ async function indexDocs() {
     docs.map(d => embedder(d, { pooling: "mean", normalize: true }))
   );
 
-  localStorage.setItem(
-    CACHE_KEY,
-    JSON.stringify({ docs, vectors })
-  );
+  localStorage.setItem(CACHE_KEY, JSON.stringify({ docs, vectors }));
 }
 
-// ---------- Init ----------
-console.log("Loading tabs...");
+/* ---------- INIT ---------- */
 await loadAllTabs();
-console.log("Rows loaded:", docs.length);
-
-console.log("Indexing docs...");
 await indexDocs();
-console.log("Indexing done");
 
 document.getElementById("a").innerText =
   "Knowledge base loaded. You can start asking questions.";
 
-// Auto refresh every 15 minutes
-setInterval(async () => {
-  localStorage.removeItem(CACHE_KEY);
-  await loadAllTabs();
-  await indexDocs();
-  console.log("Knowledge refreshed from Google Sheets");
-}, 15 * 60 * 1000);
-
-// ---------- Ask ----------
+/* ---------- ASK ---------- */
 window.ask = async function () {
   const q = document.getElementById("q").value.trim();
   if (!q) return;
@@ -176,7 +166,7 @@ Question:
 ${q}
 `;
 
-  const out = await generator(prompt, { max_new_tokens: 120 });
+  const out = await generator(prompt, { max_new_tokens: 100 });
   const confidence = Math.round(scored[0].score * 100);
 
   document.getElementById("a").innerText =
