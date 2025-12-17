@@ -3,12 +3,37 @@
 <head>
   <title>Inside Sales Knowledge Assistant</title>
   <link rel="icon" href="data:,">
+
   <style>
-    body { font-family: Arial; padding: 20px; background: #f7f7f7; }
-    input { width: 70%; padding: 10px; }
-    button { padding: 10px 16px; margin-left: 5px; }
-    button:disabled { opacity: 0.5; }
-    pre { background: #fff; padding: 15px; margin-top: 15px; border-radius: 5px; white-space: pre-wrap; }
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f7f7f7;
+    }
+    h3 {
+      margin-bottom: 10px;
+    }
+    input {
+      width: 70%;
+      padding: 10px;
+      font-size: 14px;
+    }
+    button {
+      padding: 10px 16px;
+      margin-left: 5px;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    pre {
+      background: #ffffff;
+      padding: 15px;
+      margin-top: 15px;
+      border-radius: 5px;
+      white-space: pre-wrap;
+    }
   </style>
 </head>
 
@@ -22,41 +47,59 @@
 <pre id="a">Loading knowledge base… please wait.</pre>
 
 <script type="module">
-import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.16.1";
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.16.1";
 
-/* ===== SAFE ENV (NO PATH OVERRIDES) ===== */
-env.allowLocalModels = false;
-env.useBrowserCache = false;
-/* ======================================= */
-
+/* ================= CONFIG ================= */
 const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
 const TAB_INDEX_NAME = "Tabs";
 const SIMILARITY_THRESHOLD = 0.15;
+/* ========================================= */
 
 let docs = [];
 
-/* ---------- Load tabs ---------- */
+/* ---------- Load tab names ---------- */
 async function loadTabNames() {
-  const res = await fetch(`https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`);
+  const res = await fetch(
+    `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
+  );
   const rows = await res.json();
-  return rows.map(r => r.SheetName).filter(Boolean);
+  return rows
+    .map(r => r.SheetName)
+    .filter(name => typeof name === "string" && name.trim().length > 0)
+    .map(name => name.trim()); // 🔒 remove hidden spaces
 }
 
+/* ---------- Load all tabs safely ---------- */
 async function loadAllTabs() {
   const tabs = await loadTabNames();
   docs = [];
 
   for (const tab of tabs) {
-    const res = await fetch(`https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`);
-    const rows = await res.json();
+    const url = `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`;
+
+    let rows;
+    try {
+      const res = await fetch(url);
+      rows = await res.json();
+    } catch (e) {
+      console.warn("Failed to fetch tab:", tab);
+      continue;
+    }
+
+    if (!Array.isArray(rows)) {
+      console.warn("Invalid data for tab:", tab, rows);
+      continue;
+    }
 
     rows.forEach((row, i) => {
-      docs.push(`[${tab} | Row ${i + 2}] ${Object.values(row).join(" ")}`);
+      docs.push(
+        `[${tab} | Row ${i + 2}] ${Object.values(row).join(" ")}`
+      );
     });
   }
 }
 
-/* ---------- TF-IDF (PURE JS) ---------- */
+/* ---------- SIMPLE TOKEN MATCH SCORING ---------- */
 function tokenize(text) {
   return text.toLowerCase().split(/\W+/).filter(Boolean);
 }
@@ -64,16 +107,16 @@ function tokenize(text) {
 function score(query, doc) {
   const qTokens = tokenize(query);
   const dTokens = tokenize(doc);
-  let matches = 0;
+  let hits = 0;
 
   qTokens.forEach(t => {
-    if (dTokens.includes(t)) matches++;
+    if (dTokens.includes(t)) hits++;
   });
 
-  return matches / Math.sqrt(dTokens.length + 1);
+  return hits / Math.sqrt(dTokens.length + 1);
 }
 
-/* ---------- MODEL (GEN ONLY) ---------- */
+/* ---------- LOAD GENERATION MODEL ONLY ---------- */
 console.log("Loading generation model...");
 const generator = await pipeline(
   "text-generation",
@@ -94,18 +137,20 @@ askBtn.addEventListener("click", async () => {
   const q = document.getElementById("q").value.trim();
   if (!q) return;
 
-  const scored = docs.map(d => ({
-    text: d,
-    score: score(q, d)
-  })).sort((a, b) => b.score - a.score);
+  const ranked = docs
+    .map(d => ({ text: d, score: score(q, d) }))
+    .sort((a, b) => b.score - a.score);
 
-  if (!scored.length || scored[0].score < SIMILARITY_THRESHOLD) {
+  if (!ranked.length || ranked[0].score < SIMILARITY_THRESHOLD) {
     document.getElementById("a").innerText =
       "I don't have that information.";
     return;
   }
 
-  const context = scored.slice(0, 3).map(s => s.text).join("\n");
+  const context = ranked
+    .slice(0, 3)
+    .map(r => r.text)
+    .join("\n");
 
   const prompt = `
 Answer ONLY using the context below.
@@ -120,7 +165,11 @@ ${q}
 `;
 
   const out = await generator(prompt, { max_new_tokens: 100 });
-  document.getElementById("a").innerText = out[0].generated_text;
+
+  document.getElementById("a").innerText =
+    out[0].generated_text +
+    "\n\nSource:\n" +
+    ranked.slice(0, 3).map(r => r.text.split("]")[0] + "]").join("\n");
 });
 </script>
 
