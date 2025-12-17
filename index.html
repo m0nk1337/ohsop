@@ -3,12 +3,11 @@
 <head>
   <title>Inside Sales Knowledge Assistant</title>
   <link rel="icon" href="data:,">
-
   <style>
     body { font-family: Arial; padding: 20px; background: #f7f7f7; }
     input { width: 70%; padding: 10px; }
-    button { padding: 10px 16px; margin-left: 5px; cursor: pointer; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button { padding: 10px 16px; margin-left: 5px; }
+    button:disabled { opacity: 0.5; }
     pre { background: #fff; padding: 15px; margin-top: 15px; border-radius: 5px; white-space: pre-wrap; }
   </style>
 </head>
@@ -25,79 +24,64 @@
 <script type="module">
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.16.1";
 
-/* ================= HARD ENV RESET (SAFE) ================= */
+/* ===== SAFE ENV (NO PATH OVERRIDES) ===== */
 env.allowLocalModels = false;
 env.useBrowserCache = false;
-
-/* 🔑 CRITICAL FIX */
-env.localModelPath = "";              // ← NOT null
-env.remoteHost = "https://huggingface.co";
-env.remotePathTemplate = "{model}/resolve/main/";
-/* ======================================================== */
+/* ======================================= */
 
 const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
 const TAB_INDEX_NAME = "Tabs";
-const SIMILARITY_THRESHOLD = 0.28;
+const SIMILARITY_THRESHOLD = 0.15;
 
 let docs = [];
-let vectors = [];
 
-/* ---------- Load tab names ---------- */
+/* ---------- Load tabs ---------- */
 async function loadTabNames() {
-  const res = await fetch(
-    `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
-  );
+  const res = await fetch(`https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`);
   const rows = await res.json();
   return rows.map(r => r.SheetName).filter(Boolean);
 }
 
-/* ---------- Load all tabs ---------- */
 async function loadAllTabs() {
   const tabs = await loadTabNames();
   docs = [];
 
   for (const tab of tabs) {
-    const res = await fetch(
-      `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`
-    );
+    const res = await fetch(`https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`);
     const rows = await res.json();
 
     rows.forEach((row, i) => {
-      docs.push(
-        `[${tab} | Row ${i + 2}] ${Object.values(row).join(" : ")}`
-      );
+      docs.push(`[${tab} | Row ${i + 2}] ${Object.values(row).join(" ")}`);
     });
   }
 }
 
-/* ---------- MODELS ---------- */
-console.log("Loading embedding model...");
-const embedder = await pipeline(
-  "feature-extraction",
-  "Xenova/all-MiniLM-L6-v2"
-);
+/* ---------- TF-IDF (PURE JS) ---------- */
+function tokenize(text) {
+  return text.toLowerCase().split(/\W+/).filter(Boolean);
+}
 
+function score(query, doc) {
+  const qTokens = tokenize(query);
+  const dTokens = tokenize(doc);
+  let matches = 0;
+
+  qTokens.forEach(t => {
+    if (dTokens.includes(t)) matches++;
+  });
+
+  return matches / Math.sqrt(dTokens.length + 1);
+}
+
+/* ---------- MODEL (GEN ONLY) ---------- */
 console.log("Loading generation model...");
 const generator = await pipeline(
   "text-generation",
   "Xenova/distilgpt2"
 );
 
-/* ---------- Cosine similarity ---------- */
-function cosine(a, b) {
-  return a.reduce((s, v, i) => s + v * b[i], 0);
-}
-
-/* ---------- Index ---------- */
-async function indexDocs() {
-  vectors = await Promise.all(
-    docs.map(d => embedder(d, { pooling: "mean", normalize: true }))
-  );
-}
-
 /* ---------- INIT ---------- */
 await loadAllTabs();
-await indexDocs();
 
 document.getElementById("a").innerText =
   "Knowledge base loaded. You can start asking questions.";
@@ -110,11 +94,9 @@ askBtn.addEventListener("click", async () => {
   const q = document.getElementById("q").value.trim();
   if (!q) return;
 
-  const qVec = await embedder(q, { pooling: "mean", normalize: true });
-
-  const scored = vectors.map((v, i) => ({
-    text: docs[i],
-    score: cosine(v.data, qVec.data)
+  const scored = docs.map(d => ({
+    text: d,
+    score: score(q, d)
   })).sort((a, b) => b.score - a.score);
 
   if (!scored.length || scored[0].score < SIMILARITY_THRESHOLD) {
@@ -123,8 +105,7 @@ askBtn.addEventListener("click", async () => {
     return;
   }
 
-  const top = scored.slice(0, 3);
-  const context = top.map(s => s.text).join("\n");
+  const context = scored.slice(0, 3).map(s => s.text).join("\n");
 
   const prompt = `
 Answer ONLY using the context below.
