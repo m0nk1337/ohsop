@@ -5,11 +5,33 @@
   <link rel="icon" href="data:,">
 
   <style>
-    body { font-family: Arial; padding: 20px; background: #f7f7f7; }
-    input { width: 70%; padding: 10px; }
-    button { padding: 10px 16px; margin-left: 5px; }
-    button:disabled { opacity: 0.5; }
-    pre { background: #fff; padding: 15px; margin-top: 15px; border-radius: 5px; white-space: pre-wrap; }
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f7f7f7;
+    }
+    h3 { margin-bottom: 10px; }
+    input {
+      width: 70%;
+      padding: 10px;
+      font-size: 14px;
+    }
+    button {
+      padding: 10px 16px;
+      margin-left: 5px;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    pre {
+      background: #ffffff;
+      padding: 15px;
+      margin-top: 15px;
+      border-radius: 5px;
+      white-space: pre-wrap;
+    }
   </style>
 </head>
 
@@ -17,23 +39,27 @@
 
 <h3>Inside Sales Knowledge Assistant</h3>
 
-<input id="q" placeholder="Ask from SOP / Policy / Process..." />
+<input id="q" placeholder="Ask from SOP / Package / Policy…" />
 <button id="askBtn" disabled>Ask</button>
 
 <pre id="a">Loading knowledge base… please wait.</pre>
 
 <script type="module">
-import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.16.1";
-
-/* ================= CONFIG ================= */
+/* ======================================================
+   CONFIG
+====================================================== */
 const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
 const TAB_INDEX_NAME = "Tabs";
 const SIMILARITY_THRESHOLD = 0.15;
-/* ========================================= */
 
+/* ======================================================
+   GLOBAL STORE
+====================================================== */
 let docs = [];
 
-/* ---------- Load tab names SAFELY ---------- */
+/* ======================================================
+   LOAD TAB NAMES (SAFE)
+====================================================== */
 async function loadTabNames() {
   const res = await fetch(
     `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
@@ -42,50 +68,62 @@ async function loadTabNames() {
 
   return rows
     .map(r => typeof r.SheetName === "string" ? r.SheetName.trim() : "")
-    .filter(Boolean); // removes empty + bad entries
+    .filter(Boolean);
 }
 
-/* ---------- Load all tabs BULLETPROOF ---------- */
+/* ======================================================
+   LOAD ALL TABS (BULLETPROOF)
+====================================================== */
 async function loadAllTabs() {
   const tabs = await loadTabNames();
   docs = [];
 
   for (const tab of tabs) {
-    const cleanTab = tab.trim(); // extra safety
+    const cleanTab = tab.trim();
     const url = `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(cleanTab)}`;
 
     let rows;
     try {
       const res = await fetch(url);
       rows = await res.json();
-    } catch (e) {
-      console.warn("Failed to fetch tab:", cleanTab);
+    } catch {
+      console.warn("Skipping tab (fetch failed):", cleanTab);
       continue;
     }
 
     if (!Array.isArray(rows)) {
-      console.warn("Invalid JSON for tab:", cleanTab, rows);
+      console.warn("Skipping tab (invalid JSON):", cleanTab);
       continue;
     }
 
     rows.forEach((row, i) => {
-      docs.push(
-        `[${cleanTab} | Row ${i + 2}] ${Object.values(row).join(" ")}`
-      );
+      const text = Object.values(row)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (text.length > 0) {
+        docs.push({
+          source: `[${cleanTab} | Row ${i + 2}]`,
+          text
+        });
+      }
     });
   }
 }
 
-/* ---------- SIMPLE TOKEN MATCH ---------- */
-function tokenize(text) {
-  return text.toLowerCase().split(/\W+/).filter(Boolean);
+/* ======================================================
+   SIMPLE TOKEN MATCH SCORING (STABLE)
+====================================================== */
+function tokenize(str) {
+  return str.toLowerCase().split(/\W+/).filter(Boolean);
 }
 
-function score(query, doc) {
+function score(query, docText) {
   const qTokens = tokenize(query);
-  const dTokens = tokenize(doc);
-  let hits = 0;
+  const dTokens = tokenize(docText);
 
+  let hits = 0;
   qTokens.forEach(t => {
     if (dTokens.includes(t)) hits++;
   });
@@ -93,14 +131,9 @@ function score(query, doc) {
   return hits / Math.sqrt(dTokens.length + 1);
 }
 
-/* ---------- LOAD GENERATOR ---------- */
-console.log("Loading generation model...");
-const generator = await pipeline(
-  "text-generation",
-  "Xenova/distilgpt2"
-);
-
-/* ---------- INIT ---------- */
+/* ======================================================
+   INIT
+====================================================== */
 await loadAllTabs();
 
 document.getElementById("a").innerText =
@@ -109,13 +142,18 @@ document.getElementById("a").innerText =
 const askBtn = document.getElementById("askBtn");
 askBtn.disabled = false;
 
-/* ---------- ASK ---------- */
-askBtn.addEventListener("click", async () => {
+/* ======================================================
+   ASK HANDLER — FINAL, CLEAN OUTPUT
+====================================================== */
+askBtn.addEventListener("click", () => {
   const q = document.getElementById("q").value.trim();
   if (!q) return;
 
   const ranked = docs
-    .map(d => ({ text: d, score: score(q, d) }))
+    .map(d => ({
+      ...d,
+      score: score(q, d.text)
+    }))
     .sort((a, b) => b.score - a.score);
 
   if (!ranked.length || ranked[0].score < SIMILARITY_THRESHOLD) {
@@ -124,26 +162,19 @@ askBtn.addEventListener("click", async () => {
     return;
   }
 
-  const context = ranked.slice(0, 3).map(r => r.text).join("\n");
+  // 🔒 Clean answer: ONLY sheet content, no AI hallucination
+  const answer = ranked
+    .slice(0, 3)
+    .map(r => `• ${r.text}`)
+    .join("\n\n");
 
-  const prompt = `
-Answer ONLY using the context below.
-If the answer is not present, say:
-"I don't have that information."
-
-Context:
-${context}
-
-Question:
-${q}
-`;
-
-  const out = await generator(prompt, { max_new_tokens: 100 });
+  const sources = ranked
+    .slice(0, 3)
+    .map(r => r.source)
+    .join("\n");
 
   document.getElementById("a").innerText =
-    out[0].generated_text +
-    "\n\nSource:\n" +
-    ranked.slice(0, 3).map(r => r.text.split("]")[0] + "]").join("\n");
+    answer + "\n\nSource:\n" + sources;
 });
 </script>
 
