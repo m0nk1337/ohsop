@@ -5,35 +5,11 @@
   <link rel="icon" href="data:,">
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 20px;
-      background: #f7f7f7;
-    }
-    h3 {
-      margin-bottom: 10px;
-    }
-    input {
-      width: 70%;
-      padding: 10px;
-      font-size: 14px;
-    }
-    button {
-      padding: 10px 16px;
-      margin-left: 5px;
-      cursor: pointer;
-    }
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    pre {
-      background: #ffffff;
-      padding: 15px;
-      margin-top: 15px;
-      border-radius: 5px;
-      white-space: pre-wrap;
-    }
+    body { font-family: Arial; padding: 20px; background: #f7f7f7; }
+    input { width: 70%; padding: 10px; }
+    button { padding: 10px 16px; margin-left: 5px; }
+    button:disabled { opacity: 0.5; }
+    pre { background: #fff; padding: 15px; margin-top: 15px; border-radius: 5px; white-space: pre-wrap; }
   </style>
 </head>
 
@@ -57,49 +33,50 @@ const SIMILARITY_THRESHOLD = 0.15;
 
 let docs = [];
 
-/* ---------- Load tab names ---------- */
+/* ---------- Load tab names SAFELY ---------- */
 async function loadTabNames() {
   const res = await fetch(
     `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
   );
   const rows = await res.json();
+
   return rows
-    .map(r => r.SheetName)
-    .filter(name => typeof name === "string" && name.trim().length > 0)
-    .map(name => name.trim()); // 🔒 remove hidden spaces
+    .map(r => typeof r.SheetName === "string" ? r.SheetName.trim() : "")
+    .filter(Boolean); // removes empty + bad entries
 }
 
-/* ---------- Load all tabs safely ---------- */
+/* ---------- Load all tabs BULLETPROOF ---------- */
 async function loadAllTabs() {
   const tabs = await loadTabNames();
   docs = [];
 
   for (const tab of tabs) {
-    const url = `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`;
+    const cleanTab = tab.trim(); // extra safety
+    const url = `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(cleanTab)}`;
 
     let rows;
     try {
       const res = await fetch(url);
       rows = await res.json();
     } catch (e) {
-      console.warn("Failed to fetch tab:", tab);
+      console.warn("Failed to fetch tab:", cleanTab);
       continue;
     }
 
     if (!Array.isArray(rows)) {
-      console.warn("Invalid data for tab:", tab, rows);
+      console.warn("Invalid JSON for tab:", cleanTab, rows);
       continue;
     }
 
     rows.forEach((row, i) => {
       docs.push(
-        `[${tab} | Row ${i + 2}] ${Object.values(row).join(" ")}`
+        `[${cleanTab} | Row ${i + 2}] ${Object.values(row).join(" ")}`
       );
     });
   }
 }
 
-/* ---------- SIMPLE TOKEN MATCH SCORING ---------- */
+/* ---------- SIMPLE TOKEN MATCH ---------- */
 function tokenize(text) {
   return text.toLowerCase().split(/\W+/).filter(Boolean);
 }
@@ -116,7 +93,7 @@ function score(query, doc) {
   return hits / Math.sqrt(dTokens.length + 1);
 }
 
-/* ---------- LOAD GENERATION MODEL ONLY ---------- */
+/* ---------- LOAD GENERATOR ---------- */
 console.log("Loading generation model...");
 const generator = await pipeline(
   "text-generation",
@@ -147,10 +124,7 @@ askBtn.addEventListener("click", async () => {
     return;
   }
 
-  const context = ranked
-    .slice(0, 3)
-    .map(r => r.text)
-    .join("\n");
+  const context = ranked.slice(0, 3).map(r => r.text).join("\n");
 
   const prompt = `
 Answer ONLY using the context below.
