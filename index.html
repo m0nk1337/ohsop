@@ -25,13 +25,15 @@
 <script type="module">
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.16.1";
 
-/* ===== HARD ENV RESET ===== */
+/* ================= HARD ENV RESET (SAFE) ================= */
 env.allowLocalModels = false;
 env.useBrowserCache = false;
-env.localModelPath = null;
+
+/* 🔑 CRITICAL FIX */
+env.localModelPath = "";              // ← NOT null
 env.remoteHost = "https://huggingface.co";
 env.remotePathTemplate = "{model}/resolve/main/";
-/* ========================= */
+/* ======================================================== */
 
 const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
 const TAB_INDEX_NAME = "Tabs";
@@ -42,7 +44,9 @@ let vectors = [];
 
 /* ---------- Load tab names ---------- */
 async function loadTabNames() {
-  const res = await fetch(`https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`);
+  const res = await fetch(
+    `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
+  );
   const rows = await res.json();
   return rows.map(r => r.SheetName).filter(Boolean);
 }
@@ -53,21 +57,31 @@ async function loadAllTabs() {
   docs = [];
 
   for (const tab of tabs) {
-    const res = await fetch(`https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`);
+    const res = await fetch(
+      `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`
+    );
     const rows = await res.json();
 
     rows.forEach((row, i) => {
-      docs.push(`[${tab} | Row ${i + 2}] ${Object.values(row).join(" : ")}`);
+      docs.push(
+        `[${tab} | Row ${i + 2}] ${Object.values(row).join(" : ")}`
+      );
     });
   }
 }
 
 /* ---------- MODELS ---------- */
 console.log("Loading embedding model...");
-const embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+const embedder = await pipeline(
+  "feature-extraction",
+  "Xenova/all-MiniLM-L6-v2"
+);
 
 console.log("Loading generation model...");
-const generator = await pipeline("text-generation", "Xenova/distilgpt2");
+const generator = await pipeline(
+  "text-generation",
+  "Xenova/distilgpt2"
+);
 
 /* ---------- Cosine similarity ---------- */
 function cosine(a, b) {
@@ -88,11 +102,10 @@ await indexDocs();
 document.getElementById("a").innerText =
   "Knowledge base loaded. You can start asking questions.";
 
-/* ✅ ENABLE BUTTON ONLY AFTER READY */
 const askBtn = document.getElementById("askBtn");
 askBtn.disabled = false;
 
-/* ---------- ASK HANDLER ---------- */
+/* ---------- ASK ---------- */
 askBtn.addEventListener("click", async () => {
   const q = document.getElementById("q").value.trim();
   if (!q) return;
