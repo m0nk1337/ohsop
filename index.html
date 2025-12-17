@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Internal Knowledge AI</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f7f7f7;
+    }
+    h3 {
+      margin-bottom: 10px;
+    }
+    input {
+      width: 70%;
+      padding: 10px;
+      font-size: 14px;
+    }
+    button {
+      padding: 10px 16px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    pre {
+      background: #ffffff;
+      padding: 15px;
+      margin-top: 15px;
+      border-radius: 5px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+
+<h3>Inside Sales Knowledge Assistant</h3>
+
+<input id="q" placeholder="Ask from SOP / Policy / Process..." />
+<button onclick="ask()">Ask</button>
+
+<pre id="a">Loading knowledge base… please wait.</pre>
+
+<script type="module">
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.0";
+
+// ================= CONFIG =================
+const SHEET_ID = "11271sFaBgw1Wwc9t4sif3NS0gfitqaPQWgO3tCcTY9M";
+const TAB_INDEX_NAME = "Tabs";
+const SIMILARITY_THRESHOLD = 0.28;
+const CACHE_KEY = "sheet_vectors_v1";
+// ==========================================
+
+let docs = [];
+let vectors = [];
+
+// ---------- Load tab names ----------
+async function loadTabNames() {
+  const res = await fetch(
+    `https://opensheet.elk.sh/${SHEET_ID}/${TAB_INDEX_NAME}`
+  );
+  const rows = await res.json();
+  return rows.map(r => r.SheetName).filter(Boolean);
+}
+
+// ---------- Load all tabs ----------
+async function loadAllTabs() {
+  const tabs = await loadTabNames();
+  docs = [];
+
+  for (const tab of tabs) {
+    const res = await fetch(
+      `https://opensheet.elk.sh/${SHEET_ID}/${encodeURIComponent(tab)}`
+    );
+    const rows = await res.json();
+
+    rows.forEach((row, i) => {
+      const text = Object.values(row).join(" : ");
+      docs.push(`[${tab} | Row ${i + 2}] ${text}`);
+    });
+  }
+}
+
+// ---------- Models ----------
+const embedder = await pipeline(
+  "feature-extraction",
+  "Xenova/all-MiniLM-L6-v2"
+);
+
+const generator = await pipeline(
+  "text-generation",
+  "Xenova/phi-2"
+);
+
+// ---------- Math ----------
+function cosine(a, b) {
+  return a.reduce((s, v, i) => s + v * b[i], 0);
+}
+
+// ---------- Index / Cache ----------
+async function indexDocs() {
+  const cached = localStorage.getItem(CACHE_KEY);
+  if (cached) {
+    const parsed = JSON.parse(cached);
+    docs = parsed.docs;
+    vectors = parsed.vectors;
+    return;
+  }
+
+  vectors = await Promise.all(
+    docs.map(d => embedder(d, { pooling: "mean", normalize: true }))
+  );
+
+  localStorage.setItem(
+    CACHE_KEY,
+    JSON.stringify({ docs, vectors })
+  );
+}
+
+// ---------- Init ----------
+await loadAllTabs();
+await indexDocs();
+
+document.getElementById("a").innerText =
+  "Knowledge base loaded. You can start asking questions.";
+
+// Auto refresh every 15 minutes
+setInterval(async () => {
+  localStorage.removeItem(CACHE_KEY);
+  await loadAllTabs();
+  await indexDocs();
+  console.log("Knowledge refreshed from Google Sheets");
+}, 15 * 60 * 1000);
+
+// ---------- Ask ----------
+window.ask = async function () {
+  const q = document.getElementById("q").value.trim();
+  if (!q) return;
+
+  const qVec = await embedder(q, { pooling: "mean", normalize: true });
+
+  const scored = vectors.map((v, i) => ({
+    text: docs[i],
+    score: cosine(v.data, qVec.data)
+  })).sort((a, b) => b.score - a.score);
+
+  if (!scored.length || scored[0].score < SIMILARITY_THRESHOLD) {
+    document.getElementById("a").innerText =
+      "I don't have that information.";
+    return;
+  }
+
+  const top = scored.slice(0, 3);
+  const context = top.map(s => s.text).join("\n");
+
+  const prompt = `
+You are a restricted internal assistant.
+You must answer ONLY from the context below.
+If the answer is not present, say:
+"I don't have that information."
+
+Context:
+${context}
+
+Question:
+${q}
+`;
+
+  const out = await generator(prompt, { max_new_tokens: 120 });
+
+  const confidence = Math.round(scored[0].score * 100);
+
+  document.getElementById("a").innerText =
+    out[0].generated_text +
+    `\n\nConfidence: ${confidence}%\n\nSource:\n` +
+    top.map(s => s.text.split("]")[0] + "]").join("\n");
+};
+</script>
+
+</body>
+</html>
